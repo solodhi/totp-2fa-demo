@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>TOTP 2FA demo</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 520px; margin: 40px auto; padding: 0 16px; color: #222; }
+  section { border: 1px solid #ddd; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+  input, button { font-size: 15px; padding: 8px; margin: 4px 0; }
+  input { width: 100%; box-sizing: border-box; }
+  pre { background: #f5f5f5; padding: 10px; border-radius: 6px; white-space: pre-wrap; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<h1>TOTP 2FA demo</h1>
+
+<section id="auth">
+  <h3>1. Register / log in</h3>
+  <input id="username" placeholder="username">
+  <input id="password" type="password" placeholder="password (min 8 chars)">
+  <button onclick="register()">Register</button>
+  <button onclick="login()">Log in</button>
+</section>
+
+<section id="mfa" class="hidden">
+  <h3>2. Enter the code from Microsoft Authenticator</h3>
+  <input id="loginCode" placeholder="123456 or a recovery code">
+  <button onclick="verifyLogin()">Verify</button>
+</section>
+
+<section id="account" class="hidden">
+  <h3>Account</h3>
+  <div id="status"></div>
+  <button id="setupBtn" onclick="setup()">Set up 2FA</button>
+  <div id="setupArea" class="hidden">
+    <p>Open Microsoft Authenticator → <b>+</b> → <b>Other account</b> → scan this code:</p>
+    <img id="qr" alt="QR code" width="220" height="220">
+    <p>Can't scan? Enter this key manually: <code id="secret"></code></p>
+    <input id="enableCode" placeholder="6-digit code from the app">
+    <button onclick="enable()">Turn on 2FA</button>
+  </div>
+  <div id="disableArea" class="hidden">
+    <input id="disableCode" placeholder="6-digit code to turn 2FA off">
+    <button onclick="disable2fa()">Turn off 2FA</button>
+  </div>
+  <button onclick="logout()">Log out</button>
+</section>
+
+<pre id="out"></pre>
+
+<script>
+const $ = id => document.getElementById(id);
+const show = (id, on = true) => $(id).classList.toggle('hidden', !on);
+const out = msg => $('out').textContent = typeof msg === 'string' ? msg : JSON.stringify(msg, null, 2);
+
+async function api(path, body) {
+  const res = await fetch(path, {
+    method: body === undefined ? 'GET' : 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+    credentials: 'same-origin'
+  });
+  const text = await res.text();
+  const data = text ? JSON.parse(text) : {};
+  if (!res.ok) throw data;
+  return data;
+}
+
+const creds = () => ({ username: $('username').value, password: $('password').value });
+
+async function register() {
+  try { out(await api('/api/auth/register', creds())); } catch (e) { out(e); }
+}
+
+async function login() {
+  try {
+    const r = await api('/api/auth/login', creds());
+    if (r.mfaRequired) { show('mfa'); out('Password OK. Now enter the code from your authenticator app.'); }
+    else await loadAccount();
+  } catch (e) { out(e); }
+}
+
+async function verifyLogin() {
+  try { out(await api('/api/auth/login/verify', { code: $('loginCode').value })); show('mfa', false); await loadAccount(); }
+  catch (e) { out(e); }
+}
+
+async function loadAccount() {
+  const me = await api('/api/me');
+  show('auth', false); show('account');
+  $('status').textContent = `Logged in as ${me.username}. 2FA: ${me.totpEnabled ? 'ON' : 'OFF'}`;
+  show('setupBtn', !me.totpEnabled);
+  show('disableArea', me.totpEnabled);
+  show('setupArea', false);
+}
+
+async function setup() {
+  try {
+    const r = await api('/api/2fa/setup', {});
+    $('qr').src = r.qrCode; $('secret').textContent = r.secret;
+    show('setupArea');
+  } catch (e) { out(e); }
+}
+
+async function enable() {
+  try {
+    const r = await api('/api/2fa/enable', { code: $('enableCode').value });
+    out('2FA is ON. Save these recovery codes somewhere safe; they will not be shown again:\n\n' + r.recoveryCodes.join('\n'));
+    await loadAccount();
+  } catch (e) { out(e); }
+}
+
+async function disable2fa() {
+  try { out(await api('/api/2fa/disable', { code: $('disableCode').value })); await loadAccount(); }
+  catch (e) { out(e); }
+}
+
+async function logout() {
+  await fetch('/api/logout', { method: 'POST', credentials: 'same-origin' });
+  show('account', false); show('auth'); out('Logged out.');
+}
+</script>
+</body>
+</html>
